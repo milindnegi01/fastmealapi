@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 import requests
 import os
-import asyncpg
+import psycopg2
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,15 +24,19 @@ SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 MEALDB_API_KEY = "1"  # Default public API key
 MEALDB_API_URL = f"https://www.themealdb.com/api/json/v1/{MEALDB_API_KEY}/search.php?s="
 
-# Async function to connect to Supabase PostgreSQL
-async def get_db_connection():
-    return await asyncpg.connect(SUPABASE_DB_URL)
+# Function to get a database connection
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(SUPABASE_DB_URL)
+        return conn
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
 # API Endpoint to fetch meal details
 @app.get("/meals/{meal_name}")
 async def get_meal(meal_name: str):
     # Step 1: Check in MealDB
-    mealdb_response = requests.get(f"{MEALDB_API_URL}{meal_name}")  # No API key needed
+    mealdb_response = requests.get(f"{MEALDB_API_URL}{meal_name}")
     if mealdb_response.status_code == 200:
         mealdb_data = mealdb_response.json()
         if mealdb_data["meals"]:
@@ -40,19 +44,21 @@ async def get_meal(meal_name: str):
 
     # Step 2: Check in Supabase Database
     try:
-        conn = await get_db_connection()
-        meal = await conn.fetchrow("SELECT * FROM extra_meals WHERE LOWER(name) LIKE LOWER($1)", f"%{meal_name}%")
-        await conn.close()
-        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM extra_meals WHERE LOWER(name) LIKE LOWER(%s)", (f"%{meal_name}%",))
+        meal = cur.fetchone()
+        conn.close()
+
         if meal:
             formatted_meal = {
-                "idMeal": meal["id"],
-                "strMeal": meal["name"],
-                "strCategory": meal["category"],
-                "strArea": meal["area"],
-                "strInstructions": meal["instructions"].split("', '"),
-                "strMealThumb": meal["image"],
-                "strIngredients": meal["ingredients"].strip("[]").replace("'", "").split(", ") if meal["ingredients"] else [],
+                "idMeal": meal[0],  # Adjust indexes based on your table structure
+                "strMeal": meal[1],
+                "strCategory": meal[2],
+                "strArea": meal[3],
+                "strInstructions": meal[4].split("', '"),
+                "strMealThumb": meal[5],
+                "strIngredients": meal[6].strip("[]").replace("'", "").split(", ") if meal[6] else [],
             }
             return {"source": "Supabase DB", "data": formatted_meal}
 
@@ -65,12 +71,14 @@ async def get_meal(meal_name: str):
 @app.post("/add_meal/")
 async def add_meal(name: str, category: str, area: str, instructions: str, ingredients: str, image: str):
     try:
-        conn = await get_db_connection()
-        await conn.execute(
-            "INSERT INTO extra_meals (name, category, area, instructions, ingredients, image) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING",
-            name, category, area, instructions, ingredients, image
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO extra_meals (name, category, area, instructions, ingredients, image) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
+            (name, category, area, instructions, ingredients, image)
         )
-        await conn.close()
+        conn.commit()
+        conn.close()
         return {"message": "Meal added successfully"}
 
     except Exception as e:
