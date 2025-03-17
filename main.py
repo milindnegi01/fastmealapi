@@ -57,8 +57,7 @@ async def get_meal(meal_name: str):
                 "strCategory": meal[2],
                 "strArea": meal[3],
                 "strInstructions": meal[4].split("', '"),
-                "strMealThumb": meal[5],
-                "strIngredients": meal[6].strip("[]").replace("'", "").split(", ") if meal[6] else [],
+                "strIngredients": meal[5], 
             }
             return {"source": "Supabase DB", "data": formatted_meal}
 
